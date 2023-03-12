@@ -1,0 +1,14 @@
+version: "3"
+services:
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./scripts:/app/scripts
+      - ./utils:/app/utils
+      - ./data:/app/data
+    env_file:
+      - ./.env
+    command: default

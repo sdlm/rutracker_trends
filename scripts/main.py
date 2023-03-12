@@ -1,8 +1,7 @@
 # system
 import time
-# import os
-# CURR_PATH = os.path.abspath('')
-# ROOT_PATH = os.path.abspath(os.path.join(CURR_PATH, os.pardir))
+import os
+import logging
 
 # general
 from dotenv import dotenv_values
@@ -12,14 +11,21 @@ import sqlite3
 # third party
 from utils.rutracker import Rutracker
 
+DB_PATH = "./data/local.db"
+
+logger = logging.getLogger(__name__)
+
 
 def search_rt(sort_by:str):
-    config = dotenv_values(f".env")
+    config = {
+        **dotenv_values(".env"),
+        **os.environ
+    }
     rt = Rutracker(
-        login=config['rutracker_login'],
-        password=config['rutracker_password'],
+        login=config['RUTRACKER_LOGIN'],
+        password=config['RUTRACKER_PASSWORD'],
         tracker_url='https://rutracker.org/',
-        logging_mode='console'
+        # logging_mode='console'
     )
     return pd.DataFrame(
         [
@@ -47,10 +53,10 @@ def split_to_dim_and_fact(df:pd.DataFrame):
 
 
 def append_to_dim(df:pd.DataFrame):
-    df.drop_duplicates(subset=['id'], keep='last', inplace=True)
-    df.to_sql(
+    __df = df.drop_duplicates(subset=['id'], keep='last')
+    __df.to_sql(
         name='torrent_dim',
-        con=sqlite3.connect("./data/local.db"),
+        con=sqlite3.connect(DB_PATH),
         if_exists='append'
     )
 
@@ -60,20 +66,39 @@ def append_to_fact(df:pd.DataFrame):
     df['fact_timest'] = int(time.time())
     df.to_sql(
         name='torrent_fact',
-        con=sqlite3.connect("./data/local.db"),
+        con=sqlite3.connect(DB_PATH),
         if_exists='append'
     )
 
 
+def get_torrent_ids() -> list[int]:
+    try:
+        return pd.read_sql(
+            sql='select distinct id from torrent_dim;',
+            con=sqlite3.connect(DB_PATH),
+        )['id'].tolist()
+    except:
+        return []
+
+
 if __name__ == '__main__':
+    logging.basicConfig()
+    logging.getLogger().setLevel(logging.INFO)
 
     dfs = [
-        split_to_dim_and_fact(search_rt(sort_by=mode))
+        search_rt(sort_by=mode)
         for mode in ['number_of_seeds', 'number_of_leeches', 'date_added']
     ]
+    df_downloaded = pd.concat(dfs)
+    df_downloaded.drop_duplicates(subset=['id'], keep='last', inplace=True)
+    df_downloaded.to_csv('./data/cache.csv', index=False)
 
-    tt_dim = pd.concat([x for x, _ in dfs])
-    tt_fact = pd.concat([x for _, x in dfs])
+    tt_dim, tt_fact = split_to_dim_and_fact(df_downloaded)
 
-    append_to_dim(tt_dim)
+    existed_ids = get_torrent_ids()
+    tt_dim_filtered = tt_dim[~tt_dim['id'].isin(existed_ids)]
+    logger.info(f'Nex torrents count: {tt_dim_filtered.shape[0]}')
+    logger.info(f'Get fact by {tt_fact.shape[0]} torrents')
+
+    append_to_dim(tt_dim_filtered)
     append_to_fact(tt_fact)
